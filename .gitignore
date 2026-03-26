@@ -15,7 +15,7 @@ venv/
 .env.*
 
 # Database
-*.db
+*.db*
 
 # IDE
 .vscode/
