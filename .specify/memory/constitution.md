@@ -1,50 +1,53 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# TitanAI Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Tenant Isolation (NON-NEGOTIABLE)
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Every API operation, database query, and background job is scoped to a single tenant. Tenant data must never leak across boundaries — one library's catalog, reading lists, and activity logs are invisible to another. Isolation is enforced at the data layer, not just the API layer. All queries include tenant context; there are no global/unscoped data access paths.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. PII Protection (NON-NEGOTIABLE)
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Personally identifiable information (patron name, email) must be irreversibly hashed before persistence. No PII is ever stored in plaintext. Hashing must be deterministic enough to support deduplication (same email → same hash) but irreversible. PII handling logic is centralized in a single module — no ad-hoc hashing scattered across the codebase.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### III. Async-First Ingestion
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+Catalog ingestion from Open Library never blocks API responses. All ingestion runs as background jobs with progress tracking and status visibility. The system respects Open Library's rate limits and handles API unreliability (timeouts, partial data, missing fields) gracefully. Follow-up requests to resolve incomplete records are expected, not exceptional.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### IV. Live API Integration
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+The service calls the live Open Library API — no hard-coded or cached sample responses as test fixtures. Open Library data is inconsistent and incomplete by nature; the ingestion pipeline must handle missing fields, varying response shapes, and data regression without failing. Integration tests hit real endpoints.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### V. Observability & Auditability
+
+Every ingestion operation is logged: what was requested, results count, successes, failures, timestamps, and errors. Activity logs are tenant-scoped and API-accessible. Background job status is queryable. The system provides visibility into per-tenant resource consumption.
+
+### VI. Data Integrity & Versioning
+
+When re-ingesting a previously stored work, metadata changes create new versions rather than overwriting. Version history is preserved and API-accessible. The system handles data regression (fields present in older versions but missing in newer fetches) by retaining prior values rather than nullifying them.
+
+### VII. Fair Resource Sharing
+
+No single tenant can monopolize shared resources (API rate limits, job queue capacity, database connections). Throttling is per-tenant. Heavy usage by one tenant must not degrade service for others.
+
+## Technical Constraints
+
+- **Language**: Python 3.13, managed with `uv`
+- **Architecture**: Multi-tenant REST API service with background job processing
+- **External dependency**: Open Library public API (no API key required, rate-limited)
+- **Data assembly**: A single Open Library API response may not contain all required fields — the ingestion pipeline must compose complete records from multiple endpoints (works, authors, covers)
+- **Required book fields**: title, author name(s), first publish year, subjects, cover image URL (when available)
+
+## Quality Gates
+
+- All new features must include tests
+- Tenant isolation must be verified in tests — cross-tenant data access is a test failure
+- PII must never appear in logs, error messages, or API responses
+- Background jobs must be idempotent and resumable
+- API endpoints must support pagination
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution governs all development decisions for TitanAI. Principles I (Tenant Isolation) and II (PII Protection) are non-negotiable and override convenience or velocity concerns. All other principles should be followed unless there is a documented, justified reason to deviate. Amendments require updating this document and reviewing downstream impact.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-03-25 | **Last Amended**: 2026-03-25
