@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:openlibrary.org)"
+      "WebFetch(domain:openlibrary.org)",
+      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)",
+      "Bash(uv run:*)",
+      "Bash(python:*)"
     ]
   }
 }
