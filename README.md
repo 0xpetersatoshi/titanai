@@ -245,3 +245,105 @@ src/titanai/
     ├── ingestion.py     # Job execution with retries
     └── refresh.py       # Auto-refresh timer
 ```
+
+## Architecture Overview
+
+```
+                         ┌─────────────┐
+                         │   Client    │
+                         └──────┬──────┘
+                                │
+                         ┌──────▼──────┐
+                         │   FastAPI   │
+                         │   Router    │
+                         └──────┬──────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │  Tenant Middleware     │
+                    │  (validate + rate limit)│
+                    └───────────┬───────────┘
+                                │
+              ┌─────────────────┼─────────────────┐
+              │                 │                   │
+       ┌──────▼──────┐  ┌──────▼──────┐    ┌──────▼──────┐
+       │  Services   │  │   Workers   │    │  PII Module │
+       │ (ingestion, │  │ (async pool,│    │ (HMAC-SHA256│
+       │  versions)  │  │  refresh)   │    │  hashing)   │
+       └──────┬──────┘  └──────┬──────┘    └──────┬──────┘
+              │                │                   │
+              └────────────────┼───────────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │    Repositories     │
+                    │ (tenant-scoped SQL) │
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │  SQLite (WAL mode)  │
+                    └─────────────────────┘
+```
+
+### Request Flow
+
+1. Every tenant-scoped request hits `/tenants/{tenant_id}/...`
+2. The `get_current_tenant` middleware validates the tenant exists (404 if not), checks rate limits (429 if exceeded), and injects a `TenantContext`
+3. Route handlers delegate to service functions, passing `tenant_id` as a required parameter
+4. Repositories construct all SQL with `WHERE tenant_id = ?` — no unscoped queries exist
+5. Responses never echo back PII; only hashed identifiers are returned
+
+### Background Job System
+
+The `ingestion_jobs` table **is** the job queue — no Redis or Celery required. On startup, the app launches an async worker pool (3 workers by default) that poll the table for queued jobs.
+
+- **Atomic claiming**: Workers claim jobs via `UPDATE ... RETURNING` with SQLite's single-writer guarantee preventing double-pickup
+- **Fair scheduling**: The claim query prioritizes tenants with fewer active jobs, then FIFO — preventing any single tenant from monopolizing workers
+- **Graceful lifecycle**: Stale `in_progress` jobs are reset to `queued` on startup (safe because ingestion is idempotent via dedup). Workers get a 30-second grace period on shutdown
+- **Auto-refresh**: A periodic timer checks tenant staleness and re-creates ingestion jobs for previously completed queries
+
+## Key Design Decisions
+
+### Four-Layer Tenant Isolation
+
+Tenant isolation is enforced redundantly — a failure at any single layer cannot cause cross-tenant data exposure:
+
+| Layer | Mechanism | What It Prevents |
+| ----- | --------- | ---------------- |
+| **URL path** | `{tenant_id}` in every tenant-scoped route | Missing tenant context (404 on bad segment) |
+| **Middleware** | `get_current_tenant` validates existence, injects context | Requests against non-existent tenants |
+| **Repository** | `tenant_id` required on every method, every query has `WHERE tenant_id = ?` | Developer forgets to scope a query |
+| **Database** | FK constraints, composite unique indexes leading with `tenant_id` | Orphaned or cross-tenant data at the storage level |
+
+Cross-tenant resource access returns **404** (not 403) to avoid confirming that a resource exists under another tenant.
+
+### PII Protection via HMAC-SHA256
+
+Patron name and email are the only PII fields. They are irreversibly hashed in the service layer before reaching the repository — the database has no plaintext PII columns.
+
+- **HMAC over plain SHA-256** prevents rainbow table attacks on low-entropy emails
+- **Normalization before hashing** (lowercase, strip whitespace, collapse spaces for names) ensures deterministic hashes for deduplication
+- **Secret key** loaded from `TITANAI_PII_SECRET_KEY` env var, min 32 bytes enforced at startup — app refuses to start without it
+- PII never appears in database columns, logs, error messages, API responses, or debug output
+
+### Open Library Integration
+
+The ingestion pipeline assembles complete book records from multiple OL endpoints since no single response contains all fields:
+
+1. Search by author/subject → list of work keys
+2. Per work → `/works/{id}.json` → title, subjects
+3. Per work → extract author keys → `/authors/{id}.json` → author names
+4. Per work → construct cover URL from cover IDs
+
+A global rate limiter (`asyncio.Semaphore` at 2 req/sec) is shared across all workers. Retries use exponential backoff for 429/5xx responses. Individual work failures don't abort the job — partial success is the norm.
+
+### SQLite as the Only Datastore
+
+SQLite with WAL mode provides concurrent reads during writes, which is sufficient for this workload. Key conventions:
+
+- **UUIDs as TEXT** — generated application-side (36-char strings)
+- **Timestamps as ISO 8601 TEXT** — lexicographic sorting, compatible with SQLite date functions
+- **JSON arrays in TEXT columns** — `authors` and `subjects` stored as JSON, queryable via `LIKE` for keyword search
+- **`PRAGMA foreign_keys=ON`** enforced on every connection to maintain referential integrity
+
+### Database-Backed Job Queue
+
+The `ingestion_jobs` table doubles as the job queue rather than adding Redis or Celery. This keeps the deployment to a single process with zero external infrastructure. SQLite's single-writer guarantee makes atomic job claiming trivial, and WAL mode ensures API reads aren't blocked during job processing.
