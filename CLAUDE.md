@@ -38,3 +38,10 @@ uv add --dev <package>
 ## Prompt Logging
 
 Every interaction must be appended to `prompt-log.md`. This applies across sessions — always append, never overwrite. Each entry should include a brief summary of the user's request and Claude's response/actions.
+
+## Active Technologies
+- Python 3.12+ + FastAPI, uvicorn, httpx (async HTTP), pydantic v2, pydantic-settings, aiosqlite (001-multi-tenant-catalog)
+- SQLite via aiosqlite (WAL mode, `PRAGMA foreign_keys=ON`) (001-multi-tenant-catalog)
+
+## Recent Changes
+- 001-multi-tenant-catalog: Added Python 3.12+ + FastAPI, uvicorn, httpx (async HTTP), pydantic v2, pydantic-settings, aiosqlite

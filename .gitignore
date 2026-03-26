@@ -8,3 +8,24 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# Database
+*.db*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
